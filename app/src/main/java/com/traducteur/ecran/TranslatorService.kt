@@ -147,7 +147,7 @@ class TranslatorService : Service() {
         )
 
         overlay = OverlayController(this, onToggle = { toggle() }, onClose = { stopSelf() }).also { it.show() }
-        processor = TextProcessor()
+        processor = TextProcessor(this).also { it.onError = { msg -> showError(msg) } }
 
         scope.launch {
             try {
@@ -168,6 +168,15 @@ class TranslatorService : Service() {
             ).show()
             runLoop()
         }
+    }
+
+    private var lastErrorAt = 0L
+
+    private fun showError(msg: String) {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastErrorAt < 30_000) return
+        lastErrorAt = now
+        Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
     }
 
     private fun toggle() {
@@ -218,10 +227,13 @@ class TranslatorService : Service() {
             prevSig = sig
             if (stableTicks < 2) continue
 
+            overlay?.setBusy(true)
             val blocks = try {
                 processor?.process(frame) ?: emptyList()
             } catch (e: Exception) {
                 emptyList()
+            } finally {
+                overlay?.setBusy(false)
             }
 
             // L'écran a bougé pendant l'analyse ? On jette le résultat.

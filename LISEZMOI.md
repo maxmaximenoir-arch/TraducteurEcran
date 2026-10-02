@@ -23,8 +23,15 @@ Variante sans Android Studio : mets le dossier dans un dépôt GitHub. Le fichie
 
 **La bulle verte :** appui court = pause/reprise · appui long = fermer · glisser = déplacer.
 
+## Traduction par IA (recommandé)
+Dans l'appli, choisis **IA Gemini** et colle ta clé gratuite (lien « Créer ma clé gratuite »).
+L'IA traduit chaque écran d'un coup, avec le contexte des répliques précédentes : ton, émotions,
+argot et tutoiement sont adaptés, pas de mot à mot. Sans clé ou sans réseau, la traduction
+hors-ligne prend le relais automatiquement.
+
 ## Bon à savoir
-- La traduction est automatique (moteur Google ML Kit sur le téléphone) : compréhensible, pas parfaite.
+- En mode hors-ligne, la traduction est basique. Avec l'IA, elle est bien plus naturelle.
+- Offre gratuite Gemini : nombre de requêtes par jour limité ; Google peut utiliser les textes envoyés pour améliorer ses services.
 - Les traductions sont légèrement transparentes : Android l'impose pour que tu puisses continuer à défiler à travers.
 - **Écran noir / rien ne se traduit ?** Certaines applis bloquent la capture d'écran. Dans ce cas, lis le webtoon dans Chrome plutôt que dans l'appli.
 - Pensé pour le mode portrait.

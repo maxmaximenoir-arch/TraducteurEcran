@@ -11,7 +11,7 @@
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
         android:label="Traducteur Écran"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@android:style/Theme.Material.NoActionBar">
 
         <activity
             android:name=".MainActivity"
