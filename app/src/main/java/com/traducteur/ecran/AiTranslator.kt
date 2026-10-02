@@ -14,10 +14,13 @@ class ApiException(val code: Int, message: String) : Exception(message)
  * avec les dernières répliques en contexte, pour une traduction naturelle
  * qui respecte le ton et les émotions.
  */
-class AiTranslator(private val engine: String, private val apiKey: String) {
+class AiTranslator(
+    private val engine: String,
+    private val apiKey: String,
+    private val history: ArrayDeque<Pair<String, String>> = ArrayDeque()
+) {
 
     private var geminiModel: String? = null
-    private val history = ArrayDeque<Pair<String, String>>()
 
     private val systemPrompt = """
 Tu es un traducteur professionnel de webtoons et de manhwas, de l'anglais vers le français.

@@ -27,6 +27,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.IntentCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
@@ -50,7 +51,7 @@ class TranslatorService : Service() {
         const val EXTRA_DATA = "data"
         private const val CHANNEL_ID = "traduction"
         private const val NOTIF_ID = 1
-        private const val TICK_MS = 200L
+        private const val TICK_MS = 150L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -147,7 +148,10 @@ class TranslatorService : Service() {
         )
 
         overlay = OverlayController(this, onToggle = { toggle() }, onClose = { stopSelf() }).also { it.show() }
-        processor = TextProcessor(this).also { it.onError = { msg -> showError(msg) } }
+        processor = TextProcessor(this, scope).also {
+            it.onError = { msg -> showError(msg) }
+            it.onTranslated = { refreshShownLabels() }
+        }
 
         scope.launch {
             try {
@@ -182,29 +186,44 @@ class TranslatorService : Service() {
     private fun toggle() {
         active = !active
         overlay?.setActive(active)
-        if (!active) overlay?.clearLabels()
+        if (!active) {
+            overlay?.clearLabels()
+            showing = false
+            shownBubbles = null
+        }
     }
+
+    // État de l'affichage (partagé avec le rafraîchissement quand l'IA répond).
+    private var showing = false
+    private var shownBubbles: List<Bubble>? = null
+    private var shownTexts: List<String>? = null
+    private var shownFrameW = 1
+    private var shownFrameH = 1
+    private var refSig: IntArray? = null
+    private var ignoreUntil = 0L
 
     /**
      * Boucle principale :
-     *  - pendant le défilement : rien n'est affiché ;
-     *  - dès que l'écran est immobile ~0,4 s : lecture + traduction + affichage ;
-     *  - au moindre défilement : on efface et on recommence.
+     *  - pendant le défilement : rien n'est affiché, mais les bulles qui apparaissent
+     *    sont lues et envoyées à l'IA en avance ;
+     *  - dès que l'écran est immobile (~0,2 s) : affichage, quasi instantané si c'est déjà traduit ;
+     *  - si une bulle n'était pas encore prête : traduction de secours tout de suite,
+     *    remplacée automatiquement par la version IA dès qu'elle arrive.
      */
     private suspend fun runLoop() {
-        var showing = false
         var prevSig: IntArray? = null
-        var refSig: IntArray? = null
         var stableTicks = 0
-        var ignoreUntil = 0L
         var wasActive = true
+        var lastPrefetchAt = 0L
+        var prefetchJob: Job? = null
 
         while (currentCoroutineContext().isActive) {
             delay(TICK_MS)
             if (!active) { wasActive = false; continue }
             if (!wasActive) {
-                showing = false; prevSig = null; stableTicks = 0; wasActive = true
+                showing = false; shownBubbles = null; prevSig = null; stableTicks = 0; wasActive = true
             }
+            val p = processor ?: continue
 
             val snap = withContext(Dispatchers.Default) { snapshot() } ?: continue
             val frame = snap.first
@@ -216,49 +235,105 @@ class TranslatorService : Service() {
                 if (now < ignoreUntil || refSig == null) { refSig = sig; continue }
                 if (changed(refSig, sig)) {
                     overlay?.clearLabels()
-                    showing = false; prevSig = null; stableTicks = 0
-                    ignoreUntil = now + 150
+                    overlay?.setBusy(false)
+                    showing = false; shownBubbles = null
+                    prevSig = null; stableTicks = 0
+                    ignoreUntil = now + 120
                 }
                 continue
             }
 
             if (now < ignoreUntil) { prevSig = sig; continue }
-            stableTicks = if (prevSig != null && !changed(prevSig, sig)) stableTicks + 1 else 0
+            val moving = prevSig == null || changed(prevSig, sig)
+            stableTicks = if (moving) 0 else stableTicks + 1
             prevSig = sig
-            if (stableTicks < 2) continue
 
-            overlay?.setBusy(true)
-            val blocks = try {
-                processor?.process(frame) ?: emptyList()
-            } catch (e: Exception) {
-                emptyList()
-            } finally {
-                overlay?.setBusy(false)
-            }
-
-            // L'écran a bougé pendant l'analyse ? On jette le résultat.
-            val check = withContext(Dispatchers.Default) { snapshot() }
-            if (check != null && changed(sig, check.second)) {
-                stableTicks = 0; prevSig = check.second
+            if (moving) {
+                // Pré-traduction : on lit ce qui entre à l'écran pendant que tu défiles.
+                if (now - lastPrefetchAt > 350 && prefetchJob?.isActive != true) {
+                    lastPrefetchAt = now
+                    val f = frame
+                    prefetchJob = scope.launch {
+                        try {
+                            val h = f.height
+                            // On ignore les bulles coupées par le haut ou le bas de l'écran.
+                            val full = p.recognize(f).filter { it.rect.top > h * 0.03f && it.rect.bottom < h * 0.97f }
+                            p.request(full)
+                        } catch (_: Exception) {}
+                    }
+                }
                 continue
             }
-            if (!active) continue
+            if (stableTicks < 1) continue
 
-            val sx = screenW.toFloat() / frame.width
-            val sy = screenH.toFloat() / frame.height
-            val bubble = overlay?.bubbleRect()
-            val placed = blocks.mapNotNull { b ->
-                val r = Rect(
-                    (b.rect.left * sx).toInt(), (b.rect.top * sy).toInt(),
-                    (b.rect.right * sx).toInt(), (b.rect.bottom * sy).toInt()
-                )
-                if (bubble != null && Rect.intersects(r, bubble)) null else TranslatedBlock(r, b.text)
+            // ---- L'écran est immobile : affichage ----
+            val bubbles = try { p.recognize(frame) } catch (e: Exception) { emptyList() }
+            p.request(bubbles)
+
+            // Si des bulles ne sont pas encore traduites par l'IA, on lui laisse un court instant.
+            var aborted = false
+            val deadline = SystemClock.uptimeMillis() + 1200
+            if (p.missingAi(bubbles)) overlay?.setBusy(true)
+            while (p.missingAi(bubbles) && SystemClock.uptimeMillis() < deadline) {
+                delay(100)
+                val s = withContext(Dispatchers.Default) { snapshot() }
+                if (s != null && changed(sig, s.second)) { aborted = true; break }
             }
-            overlay?.showLabels(placed)
+            if (aborted || !active) {
+                overlay?.setBusy(false)
+                prevSig = null; stableTicks = 0
+                continue
+            }
+
+            val texts = p.textsFor(bubbles)
+            val check = withContext(Dispatchers.Default) { snapshot() }
+            if (check != null && changed(sig, check.second)) {
+                overlay?.setBusy(false)
+                prevSig = check.second; stableTicks = 0
+                continue
+            }
+
+            shownFrameW = frame.width
+            shownFrameH = frame.height
+            placeLabels(bubbles, texts)
+            overlay?.setBusy(p.missingAi(bubbles))
             showing = true
+            shownBubbles = bubbles
+            shownTexts = texts
             refSig = null
             ignoreUntil = SystemClock.uptimeMillis() + 500
         }
+    }
+
+    /** Remplace les traductions de secours par la version IA dès qu'elle arrive. */
+    private fun refreshShownLabels() {
+        val bubbles = shownBubbles ?: return
+        val p = processor ?: return
+        if (!showing || !active) return
+        scope.launch {
+            val texts = p.textsFor(bubbles)
+            if (!showing || shownBubbles !== bubbles) return@launch
+            overlay?.setBusy(p.missingAi(bubbles))
+            if (texts == shownTexts) return@launch
+            shownTexts = texts
+            placeLabels(bubbles, texts)
+            refSig = null
+            ignoreUntil = SystemClock.uptimeMillis() + 500
+        }
+    }
+
+    private fun placeLabels(bubbles: List<Bubble>, texts: List<String>) {
+        val sx = screenW.toFloat() / shownFrameW
+        val sy = screenH.toFloat() / shownFrameH
+        val bubbleRect = overlay?.bubbleRect()
+        val placed = ArrayList<TranslatedBlock>()
+        for (i in bubbles.indices) {
+            val b = bubbles[i].rect
+            val r = Rect((b.left * sx).toInt(), (b.top * sy).toInt(), (b.right * sx).toInt(), (b.bottom * sy).toInt())
+            if (bubbleRect != null && Rect.intersects(r, bubbleRect)) continue
+            placed += TranslatedBlock(r, texts[i])
+        }
+        overlay?.showLabels(placed)
     }
 
     /** Dernière image de l'écran + une "empreinte" miniature pour détecter le défilement. */

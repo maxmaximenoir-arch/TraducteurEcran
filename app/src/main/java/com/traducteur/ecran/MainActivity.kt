@@ -46,11 +46,8 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var statusText: TextView
     private lateinit var startBtn: TextView
-    private lateinit var keyBox: LinearLayout
-    private lateinit var keyInput: EditText
-    private lateinit var keyHelp: TextView
-    private lateinit var keyLink: TextView
-    private var fillingKey = false
+    private lateinit var geminiBox: LinearLayout
+    private lateinit var claudeBox: LinearLayout
 
     private fun px(v: Number) = (v.toFloat() * resources.displayMetrics.density).toInt()
 
@@ -108,8 +105,9 @@ class MainActivity : ComponentActivity() {
         val engineCard = card(root, "Moteur de traduction")
         val group = RadioGroup(this)
         val engines = listOf(
-            Prefs.GEMINI to "IA Gemini · naturel et gratuit (recommandé)",
-            Prefs.CLAUDE to "IA Claude · qualité maximale (payant)",
+            Prefs.MIX to "Gemini + relais Claude · gratuit d'abord (recommandé)",
+            Prefs.GEMINI to "IA Gemini seule · gratuit",
+            Prefs.CLAUDE to "IA Claude seule · qualité maximale (payant)",
             Prefs.OFFLINE to "Hors-ligne · basique, sans Internet"
         )
         val current = Prefs.engine(this)
@@ -133,31 +131,27 @@ class MainActivity : ComponentActivity() {
         }
         engineCard.addView(group)
 
-        keyBox = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, px(8), 0, 0)
-        }
-        keyInput = EditText(this).apply {
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            isSingleLine = true
-            textSize = 14f
-            setTextColor(textColor)
-            setHintTextColor(muted)
-            background = rounded(Color.parseColor("#11141A"), 12f, Color.parseColor("#2A2F3A"))
-            setPadding(px(14), px(12), px(14), px(12))
-        }
-        keyInput.doAfterTextChanged { txt ->
-            if (!fillingKey) {
-                Prefs.setKey(this, Prefs.engine(this), txt?.toString() ?: "")
-                refreshStatus()
-            }
-        }
-        keyHelp = label("", 13f, muted).apply { setPadding(0, px(8), 0, 0) }
-        keyLink = label("", 14f, accent, true).apply { setPadding(0, px(8), 0, px(2)) }
-        keyBox.addView(keyInput)
-        keyBox.addView(keyHelp)
-        keyBox.addView(keyLink)
-        engineCard.addView(keyBox)
+        geminiBox = keySection(
+            engineCard, Prefs.GEMINI, "Clé Gemini", "Colle ta clé API Gemini ici",
+            "Gratuite, sans carte bancaire. Elle reste uniquement sur ton téléphone.",
+            "→ Créer ma clé gratuite (Google AI Studio)", "https://aistudio.google.com/apikey"
+        )
+        claudeBox = keySection(
+            engineCard, Prefs.CLAUDE, "Clé Claude (relais)", "Colle ta clé API Claude ici",
+            "Payant à l'usage, quelques centimes par chapitre. En mode relais, utilisée seulement quand Gemini est à sa limite.",
+            "→ Créer ma clé (console Anthropic)", "https://console.anthropic.com/settings/keys"
+        )
+
+        val ecoSwitch = Switch(this)
+        ecoSwitch.text = "Mode économie · moins de requêtes, traduction un peu moins rapide"
+        ecoSwitch.textSize = 14f
+        ecoSwitch.setTextColor(textColor)
+        ecoSwitch.isChecked = Prefs.eco(this)
+        ecoSwitch.setPadding(0, px(14), 0, px(4))
+        ecoSwitch.setOnCheckedChangeListener { _, checked -> Prefs.setEco(this, checked) }
+        engineCard.addView(ecoSwitch, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
 
         // ----- Affichage -----
         val displayCard = card(root, "Affichage des traductions")
@@ -277,42 +271,63 @@ class MainActivity : ComponentActivity() {
         try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: Exception) {}
     }
 
-    private fun refreshKeyUi() {
-        val engine = Prefs.engine(this)
-        keyBox.visibility = if (engine == Prefs.OFFLINE) View.GONE else View.VISIBLE
-        fillingKey = true
-        keyInput.setText(Prefs.key(this, engine))
-        fillingKey = false
-        when (engine) {
-            Prefs.GEMINI -> {
-                keyInput.hint = "Colle ta clé API Gemini ici"
-                keyHelp.text = "Gratuite, sans carte bancaire. Elle reste uniquement sur ton téléphone."
-                keyLink.text = "→ Créer ma clé gratuite (Google AI Studio)"
-                keyLink.setOnClickListener { open("https://aistudio.google.com/apikey") }
-            }
-            Prefs.CLAUDE -> {
-                keyInput.hint = "Colle ta clé API Claude ici"
-                keyHelp.text = "Payant à l'usage (quelques centimes par chapitre). Elle reste uniquement sur ton téléphone."
-                keyLink.text = "→ Créer ma clé (console Anthropic)"
-                keyLink.setOnClickListener { open("https://console.anthropic.com/settings/keys") }
-            }
+    private fun keySection(
+        parent: LinearLayout, engine: String, title: String, hint: String,
+        help: String, linkText: String, url: String
+    ): LinearLayout {
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.setPadding(0, px(12), 0, 0)
+        box.addView(label(title, 14f, textColor, true).apply { setPadding(0, 0, 0, px(6)) })
+        val input = EditText(this)
+        input.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        input.isSingleLine = true
+        input.textSize = 14f
+        input.setTextColor(textColor)
+        input.setHintTextColor(muted)
+        input.hint = hint
+        input.background = rounded(Color.parseColor("#11141A"), 12f, Color.parseColor("#2A2F3A"))
+        input.setPadding(px(14), px(12), px(14), px(12))
+        input.setText(Prefs.key(this, engine))
+        input.doAfterTextChanged { txt ->
+            Prefs.setKey(this, engine, txt?.toString() ?: "")
+            refreshStatus()
         }
+        box.addView(input)
+        box.addView(label(help, 13f, muted).apply { setPadding(0, px(8), 0, 0) })
+        val link = label(linkText, 14f, accent, true)
+        link.setPadding(0, px(8), 0, px(2))
+        link.setOnClickListener { open(url) }
+        box.addView(link)
+        parent.addView(box)
+        return box
+    }
+
+    private fun refreshKeyUi() {
+        val e = Prefs.engine(this)
+        geminiBox.visibility = if (e == Prefs.GEMINI || e == Prefs.MIX) View.VISIBLE else View.GONE
+        claudeBox.visibility = if (e == Prefs.CLAUDE || e == Prefs.MIX) View.VISIBLE else View.GONE
     }
 
     private fun refreshStatus() {
         val overlayOk = Settings.canDrawOverlays(this)
-        val engine = Prefs.engine(this)
-        val keyOk = Prefs.key(this, engine).isNotBlank()
+        val g = Prefs.key(this, Prefs.GEMINI).isNotBlank()
+        val c = Prefs.key(this, Prefs.CLAUDE).isNotBlank()
+        val engineLine = when (Prefs.engine(this)) {
+            Prefs.OFFLINE -> "ℹ️ Mode hors-ligne : traduction basique"
+            Prefs.GEMINI -> if (g) "✅ Clé Gemini enregistrée" else "⚠️ Ajoute ta clé Gemini, sinon la traduction sera basique"
+            Prefs.CLAUDE -> if (c) "✅ Clé Claude enregistrée" else "⚠️ Ajoute ta clé Claude, sinon la traduction sera basique"
+            else -> when {
+                g && c -> "✅ Gemini en priorité, Claude en relais"
+                g -> "✅ Gemini prêt · ajoute une clé Claude pour le relais (sinon hors-ligne à la limite)"
+                c -> "⚠️ Ajoute ta clé Gemini gratuite : pour l'instant tout passe par Claude"
+                else -> "⚠️ Ajoute tes clés IA, sinon la traduction sera basique"
+            }
+        }
         statusText.text = buildString {
             append(if (overlayOk) "✅ Superposition autorisée" else "⚠️ Superposition à autoriser (on te guidera)")
             append('\n')
-            append(
-                when {
-                    engine == Prefs.OFFLINE -> "ℹ️ Mode hors-ligne : traduction basique"
-                    keyOk -> "✅ Clé IA enregistrée"
-                    else -> "⚠️ Ajoute ta clé IA, sinon la traduction sera basique"
-                }
-            )
+            append(engineLine)
         }
     }
 
